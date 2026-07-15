@@ -1,15 +1,3 @@
-"""
-Application Streamlit - Prediction du risque de violence physique conjugale
-Modele retenu : Regression Logistique (ROC-AUC = 0.820, niveau d'education
-harmonise - meme echelle categorielle pour la femme et le partenaire)
-
-Prerequis :
-pip install streamlit pandas scikit-learn --break-system-packages
-
-Lancement :
-streamlit run app.py
-"""
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -70,7 +58,7 @@ def libelle(colonne, code):
 # ---------------------------------------------------------------------------
 # 1. CHARGEMENT ET ENTRAINEMENT DU MODELE (mis en cache)
 # ---------------------------------------------------------------------------
-DATA_PATH = "dataset_final_corrige.csv"   # <-- adapte le chemin si besoin
+DATA_PATH = "dataset_violence.csv"   # <-- adapte le chemin si besoin
 
 CAT_VARS = ["ethnicite", "religion", "region", "occupation_partenaire", "residence_partenaire"]
 CIBLE = "violence_physique"
