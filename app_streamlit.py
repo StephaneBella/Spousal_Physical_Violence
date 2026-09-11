@@ -106,6 +106,14 @@ model, colonnes_entrainement, medianes, categories_valides, num_vars = entrainer
 # 2. INTERFACE - SAISIE DES CARACTERISTIQUES
 # ---------------------------------------------------------------------------
 st.title("Prédiction du risque de violence physique conjugale")
+st.markdown("""
+**Auteurs :**  
+- EBANGA MBALLA
+- BELLA MBARGA
+- ENOW
+- Kum Collins
+- Georges Nguefack-Tsague
+""")
 st.caption(
     "Outil d'aide à la décision basé sur un modèle de régression logistique "
     "entraîné sur les données EDS Cameroun (module violence domestique). "
