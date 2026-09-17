@@ -1,8 +1,12 @@
 import os
 
 import joblib
+import matplotlib.pyplot as plt
 import pandas as pd
+import shap
 import streamlit as st
+
+import train_model
 
 st.set_page_config(
     page_title="Prédiction violence physique conjugale",
@@ -70,6 +74,48 @@ def libelle(colonne, code):
     return LABELS_PAR_VARIABLE.get(colonne, {}).get(code, f"Autre ({code})")
 
 
+# ---------------------------------------------------------------------------
+# LIBELLES DES VARIABLES DU MODELE POUR L'AFFICHAGE DANS LE GRAPHIQUE SHAP
+# ---------------------------------------------------------------------------
+NOMS_VARIABLES = {
+    "ctrl_score": "Contrôle du partenaire sur ses activités",
+    "transmission_intergen": "Violence subie par la mère de la femme (enfance)",
+    "alcool_partenaire": "Consommation d'alcool du partenaire",
+    "ecart_age": "Écart d'âge dans le couple",
+    "age_femme": "Âge de la femme",
+    "age_partenaire": "Âge du partenaire",
+    "age_premiere_union": "Âge lors de la première mise en couple",
+    "age_premier_rapport": "Âge lors du premier rapport intime",
+    "richesse": "Niveau de vie du foyer",
+    "education_partenaire": "Niveau d'études du partenaire",
+    "education_femme": "Niveau d'études de la femme",
+    "attitude_score": "Attitude envers la violence conjugale",
+    "autonomie_score": "Autonomie décisionnelle de la femme",
+    "polygamie": "Polygamie du partenaire",
+    "milieu": "Milieu de résidence",
+    "ethnicite": "Ethnie",
+    "religion": "Religion",
+    "region": "Région",
+    "occupation_partenaire": "Métier du partenaire",
+    "residence_partenaire": "Cohabitation avec le partenaire",
+}
+
+
+def nom_lisible(colonne: str) -> str:
+    """Traduit un nom de colonne technique du modele en libelle lisible pour le graphique SHAP."""
+    if colonne in NOMS_VARIABLES:
+        return NOMS_VARIABLES[colonne]
+    if colonne.endswith("_manquant"):
+        base = colonne[: -len("_manquant")]
+        return f"{NOMS_VARIABLES.get(base, base)} (donnée manquante)"
+    for var_cat in CAT_VARS:
+        prefixe = f"{var_cat}_"
+        if colonne.startswith(prefixe):
+            code = colonne[len(prefixe):]
+            return f"{NOMS_VARIABLES.get(var_cat, var_cat)} : {libelle(var_cat, code)}"
+    return colonne
+
+
 def _index_slider(question: str, options: list) -> int:
     """Curseur à choix textuels : renvoie l'index du choix (utilisé par le modèle)."""
     choix = st.select_slider(question, options=options, value=options[0])
@@ -131,6 +177,22 @@ def charger_modele():
 
 
 model, colonnes_entrainement, medianes, categories_valides, num_vars = charger_modele()
+
+
+@st.cache_resource
+def charger_fond_shap():
+    """Recalcule le jeu de donnees d'entrainement encode, utilise comme reference (fond) par SHAP."""
+    bundle_entrainement = train_model.entrainer_modele()
+    return bundle_entrainement["X_entrainement"]
+
+
+@st.cache_resource
+def construire_explainer(_model, _fond):
+    return shap.LinearExplainer(_model, _fond)
+
+
+X_fond_shap = charger_fond_shap().reindex(columns=colonnes_entrainement, fill_value=0)
+explainer_shap = construire_explainer(model, X_fond_shap)
 
 # ---------------------------------------------------------------------------
 # 2. EN-TETE
@@ -366,6 +428,38 @@ with tab_prediction:
             "Ce résultat est une estimation à titre indicatif. Il ne remplace pas "
             "l'avis d'un professionnel (médecin, travailleur social, association d'aide)."
         )
+
+        # ---------------------------------------------------------------
+        # 3.3 EXPLICATION DE LA PREDICTION (VALEURS DE SHAPLEY / SHAP)
+        # ---------------------------------------------------------------
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="section-title">{icon("flag")} Facteurs qui expliquent cette estimation</div>',
+            unsafe_allow_html=True,
+        )
+
+        with st.container(border=True):
+            valeurs_shap = explainer_shap(df_obs_encoded)
+            explication = shap.Explanation(
+                values=valeurs_shap.values[0],
+                base_values=valeurs_shap.base_values[0],
+                data=df_obs_encoded.iloc[0].values,
+                feature_names=[nom_lisible(c) for c in colonnes_entrainement],
+            )
+
+            fig, ax = plt.subplots()
+            shap.plots.waterfall(explication, max_display=12, show=False)
+            plt.tight_layout()
+            st.pyplot(fig, clear_figure=True)
+
+            st.caption(
+                "Chaque barre représente la contribution d'un facteur au score de risque "
+                "(échelle log-odds, avant transformation en pourcentage) : en rouge, les "
+                "facteurs qui augmentent le risque estimé ; en bleu, ceux qui le diminuent. "
+                "Cette décomposition, basée sur les valeurs de Shapley (méthode SHAP), est "
+                "fournie à titre indicatif pour mieux comprendre l'estimation ci-dessus — ce "
+                "n'est pas une explication causale."
+            )
 
 # ---------------------------------------------------------------------------
 # 4. PIED DE PAGE

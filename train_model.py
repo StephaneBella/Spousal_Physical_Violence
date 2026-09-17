@@ -59,6 +59,7 @@ def entrainer_modele():
         "medianes": medianes,
         "categories_valides": categories_valides,
         "num_vars": num_vars,
+        "X_entrainement": X,
     }
 
 
