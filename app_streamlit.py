@@ -251,7 +251,7 @@ def icon(name: str) -> str:
 # ---------------------------------------------------------------------------
 TEXTS = {
     "en": {
-        "hero_title": "Does my situation present a risk?",
+        "hero_title": "Machine learning for analysing demographic and socioeconomic factors associated with domestic violence in Cameroon.",
         "hero_subtitle": (
             "Answer a few simple questions to get an indicative estimate of the "
             "level of risk of physical violence in a couple."
@@ -332,7 +332,7 @@ TEXTS = {
         ),
     },
     "fr": {
-        "hero_title": "Est-ce que ma situation présente un risque ?",
+        "hero_title": "Apprentissage automatique pour l'analyse des facteurs démographiques et socioéconomiques associés à la violence domestique au Cameroun.",
         "hero_subtitle": (
             "Répondez à quelques questions simples pour obtenir une estimation, à titre "
             "indicatif, du niveau de risque de violence physique dans un couple."
