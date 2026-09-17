@@ -1,9 +1,23 @@
-import streamlit as st
-import pandas as pd
-import numpy as np
-from sklearn.linear_model import LogisticRegression
+import os
 
-st.set_page_config(page_title="Prediction violence physique conjugale", layout="wide")
+import joblib
+import pandas as pd
+import streamlit as st
+
+st.set_page_config(
+    page_title="Prédiction violence physique conjugale",
+    page_icon=":material/shield:",
+    layout="wide",
+)
+
+
+def charger_css(chemin: str) -> None:
+    if os.path.exists(chemin):
+        with open(chemin, encoding="utf-8") as f:
+            st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
+
+
+charger_css("style.css")
 
 # ---------------------------------------------------------------------------
 # LIBELLES REELS (dictionnaire de variables EDS Cameroun) POUR L'AFFICHAGE
@@ -19,16 +33,16 @@ REGION_LABELS = {
 ETHNICITE_LABELS = {
     "3": "Foulbé", "78": "Gbaya", "101": "Toupouri", "176": "Bamoun",
     "202": "Bamiléké", "232": "Bassa", "235": "Éton", "236": "Ewondo",
-    "245": "Boulou", "256": "Maka / Makya", "996": "Autre (code EDS)",
-    "Autre": "Autres ethnies (regroupées, effectif < 2%)",
+    "245": "Boulou", "256": "Maka / Makya", "996": "Autre ethnie",
+    "Autre": "Autre ethnie",
 }
 
 OCCUPATION_LABELS = {
     "11": "Agriculteur / cultivateur", "33": "Enseignant",
     "62": "Commerçant / vendeur", "66": "Conducteur de véhicule",
-    "72": "Métiers du bâtiment", "73": "Métallurgie / construction mécanique",
-    "82": "Gendarmerie / armée", "96": "Autre profession (code EDS)",
-    "Autre": "Autres professions (regroupées, effectif < 2%)",
+    "72": "Métiers du bâtiment", "73": "Métallurgie / mécanique",
+    "82": "Gendarmerie / armée", "96": "Autre métier",
+    "Autre": "Autre métier",
     "Manquant": "Sans partenaire actuel / non renseigné",
 }
 
@@ -38,10 +52,10 @@ RELIGION_LABELS = {
 }
 
 RESIDENCE_LABELS = {
-    "1": "Vit avec elle", "2": "Vit ailleurs", "Manquant": "Non renseigné",
+    "1": "Oui, il vit avec elle", "2": "Non, il vit ailleurs", "Manquant": "Non renseigné",
 }
 
-EDUCATION_LABELS = {0: "Aucune", 1: "Primaire", 2: "Secondaire", 3: "Supérieur"}
+EDUCATION_LABELS = {0: "Aucune", 1: "École primaire", 2: "École secondaire", 3: "Études supérieures"}
 
 LABELS_PAR_VARIABLE = {
     "region": REGION_LABELS,
@@ -53,192 +67,314 @@ LABELS_PAR_VARIABLE = {
 
 
 def libelle(colonne, code):
-    return LABELS_PAR_VARIABLE.get(colonne, {}).get(code, f"Code EDS {code}")
+    return LABELS_PAR_VARIABLE.get(colonne, {}).get(code, f"Autre ({code})")
+
+
+def _index_slider(question: str, options: list) -> int:
+    """Curseur à choix textuels : renvoie l'index du choix (utilisé par le modèle)."""
+    choix = st.select_slider(question, options=options, value=options[0])
+    return options.index(choix)
+
 
 # ---------------------------------------------------------------------------
-# 1. CHARGEMENT ET ENTRAINEMENT DU MODELE (mis en cache)
+# ICONES (SVG inline, sans emoji) POUR LE HTML PERSONNALISE
 # ---------------------------------------------------------------------------
-DATA_PATH = "dataset_violence.csv"   # <-- adapte le chemin si besoin
+_ICON_PATHS = {
+    "shield": '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
+    "user": '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
+    "users": (
+        '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/>'
+        '<path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>'
+    ),
+    "home": '<path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>',
+    "flag": '<path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/>',
+    "warning": (
+        '<path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>'
+        '<line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>'
+    ),
+    "check": '<polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>',
+}
+
+
+def icon(name: str) -> str:
+    return (
+        '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+        f'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{_ICON_PATHS[name]}</svg>'
+    )
+
+
+# ---------------------------------------------------------------------------
+# 1. CHARGEMENT DU MODELE PRE-ENTRAINE (mis en cache)
+# ---------------------------------------------------------------------------
+MODEL_PATH = "model.joblib"
 
 CAT_VARS = ["ethnicite", "religion", "region", "occupation_partenaire", "residence_partenaire"]
 CIBLE = "violence_physique"
-SEUIL_RARE = 0.02
 
 
 @st.cache_resource
-def entrainer_modele():
-    df = pd.read_csv(DATA_PATH)
-    num_vars = [c for c in df.columns if c not in CAT_VARS + [CIBLE]]
-
-    medianes = {}
-    for col in num_vars:
-        if df[col].isna().sum() > 0:
-            df[f"{col}_manquant"] = df[col].isna().astype(int)
-            medianes[col] = df[col].median()
-            df[col] = df[col].fillna(medianes[col])
-        else:
-            medianes[col] = df[col].median()
-
-    categories_valides = {}
-    for col in CAT_VARS:
-        df[col] = df[col].fillna(-1).astype(int).astype(str).replace("-1", "Manquant")
-        freq = df[col].value_counts(normalize=True)
-        rares = freq[freq < SEUIL_RARE].index
-        df[col] = df[col].apply(lambda x: "Autre" if x in rares else x)
-        categories_valides[col] = sorted(df[col].unique().tolist())
-
-    df_encoded = pd.get_dummies(df, columns=CAT_VARS, prefix=CAT_VARS)
-    bool_cols = df_encoded.select_dtypes(include="bool").columns
-    df_encoded[bool_cols] = df_encoded[bool_cols].astype(int)
-
-    X = df_encoded.drop(columns=[CIBLE])
-    y = df_encoded[CIBLE]
-
-    model = LogisticRegression(max_iter=2000, class_weight="balanced", random_state=42)
-    model.fit(X, y)
-
-    return model, X.columns.tolist(), medianes, categories_valides, num_vars
+def charger_modele():
+    if not os.path.exists(MODEL_PATH):
+        st.error(
+            f"Fichier modèle introuvable ({MODEL_PATH}). "
+            "Lancez d'abord `python train_model.py` pour entraîner et sauvegarder le modèle."
+        )
+        st.stop()
+    bundle = joblib.load(MODEL_PATH)
+    return (
+        bundle["model"],
+        bundle["colonnes_entrainement"],
+        bundle["medianes"],
+        bundle["categories_valides"],
+        bundle["num_vars"],
+    )
 
 
-model, colonnes_entrainement, medianes, categories_valides, num_vars = entrainer_modele()
+model, colonnes_entrainement, medianes, categories_valides, num_vars = charger_modele()
 
 # ---------------------------------------------------------------------------
-# 2. INTERFACE - SAISIE DES CARACTERISTIQUES
+# 2. EN-TETE
 # ---------------------------------------------------------------------------
-st.title("Prédiction du risque de violence physique conjugale")
-st.markdown("""
-**Auteurs :**  
-- EBANGA MBALLA
-- BELLA MBARGA
-- ENOW
-- Kum Collins
-- Georges Nguefack-Tsague
-""")
-st.caption(
-    "Outil d'aide à la décision basé sur un modèle de régression logistique "
-    "entraîné sur les données EDS Cameroun (module violence domestique). "
-    "Ne constitue pas un diagnostic — à utiliser en complément du jugement professionnel."
+st.markdown(
+    f"""
+    <div class="hero">
+        <span class="brand-pill">{icon("shield")} SocaStat</span>
+        <h1>Est-ce que ma situation présente un risque ?</h1>
+        <p>
+            Répondez à quelques questions simples pour obtenir une estimation, à titre
+            indicatif, du niveau de risque de violence physique dans un couple.
+        </p>
+    </div>
+    """,
+    unsafe_allow_html=True,
 )
 
-st.divider()
-
-col1, col2, col3 = st.columns(3)
-
-with col1:
-    st.subheader("Femme")
-    age_femme = st.slider("Âge de la répondante", 15, 49, 28)
-    age_premiere_union = st.slider("Âge à la première union", 10, 40, 18)
-    age_premier_rapport = st.slider("Âge au premier rapport sexuel", 10, 40, 17)
-    education_femme = st.selectbox(
-        "Niveau d'éducation de la femme", [0, 1, 2, 3], index=1,
-        format_func=lambda x: EDUCATION_LABELS[x]
-    )
-    richesse = st.selectbox("Quintile de richesse", [1, 2, 3, 4, 5], index=2,
-                             format_func=lambda x: {1: "1 - Le plus pauvre", 5: "5 - Le plus riche"}.get(x, str(x)))
-    milieu = st.radio("Milieu de résidence", [0, 1], format_func=lambda x: "Urbain" if x == 0 else "Rural", horizontal=True)
-
-with col2:
-    st.subheader("Partenaire")
-    age_partenaire = st.slider("Âge du partenaire", 15, 90, 35)
-    education_partenaire = st.selectbox(
-        "Niveau d'éducation du partenaire", [0, 1, 2, 3], index=1,
-        format_func=lambda x: EDUCATION_LABELS[x]
-    )
-    alcool_partenaire = st.selectbox("Consommation d'alcool du partenaire", [0, 1, 2],
-                                      format_func=lambda x: {0: "Jamais", 1: "Souvent", 2: "Parfois"}[x])
-    ctrl_score = st.slider("Score de comportements de contrôle (0 = aucun, 5 = maximal)", 0, 5, 0)
-    polygamie = st.selectbox("Situation de polygamie (nombre de co-épouses)", [0, 1, 2, 3], index=0)
-
-with col3:
-    st.subheader("Contexte / couple")
-    transmission_intergen = st.radio("Le père de la répondante battait-il sa mère ?", [0, 1],
-                                      format_func=lambda x: "Non" if x == 0 else "Oui", horizontal=True)
-    attitude_score = st.slider("Score d'attitudes justifiant la violence (0 à 5)", 0, 5, 0)
-    autonomie_score = st.slider("Score d'autonomie décisionnelle (0 à 3)", 0, 3, 1)
-    region = st.selectbox(
-        "Région", sorted(categories_valides["region"], key=lambda c: int(c)),
-        format_func=lambda c: libelle("region", c)
-    )
-    ethnicite = st.selectbox(
-        "Ethnicité", categories_valides["ethnicite"],
-        format_func=lambda c: libelle("ethnicite", c)
-    )
-    religion = st.selectbox(
-        "Religion", categories_valides["religion"],
-        format_func=lambda c: libelle("religion", c)
-    )
-    occupation_partenaire = st.selectbox(
-        "Occupation du partenaire", categories_valides["occupation_partenaire"],
-        format_func=lambda c: libelle("occupation_partenaire", c)
-    )
-    residence_partenaire = st.selectbox(
-        "Réside actuellement avec le partenaire", categories_valides["residence_partenaire"],
-        format_func=lambda c: libelle("residence_partenaire", c)
-    )
-
-ecart_age = age_partenaire - age_femme
-
-st.divider()
-
 # ---------------------------------------------------------------------------
-# 3. CONSTRUCTION DE L'OBSERVATION ET PREDICTION
+# 3. ONGLETS : A PROPOS / PREDICTION
 # ---------------------------------------------------------------------------
-if st.button("Calculer le risque", type="primary", use_container_width=True):
+tab_apropos, tab_prediction = st.tabs([":material/info: À propos", ":material/search: Faire une estimation"])
 
-    observation = {
-        "ctrl_score": ctrl_score,
-        "transmission_intergen": transmission_intergen,
-        "alcool_partenaire": alcool_partenaire,
-        "ecart_age": ecart_age,
-        "age_femme": age_femme,
-        "age_partenaire": age_partenaire,
-        "age_premiere_union": age_premiere_union,
-        "age_premier_rapport": age_premier_rapport,
-        "richesse": richesse,
-        "education_partenaire": education_partenaire,
-        "education_femme": education_femme,
-        "attitude_score": attitude_score,
-        "autonomie_score": autonomie_score,
-        "polygamie": polygamie,
-        "milieu": milieu,
-        "ethnicite": ethnicite,
-        "religion": religion,
-        "region": region,
-        "occupation_partenaire": occupation_partenaire,
-        "residence_partenaire": residence_partenaire,
-    }
+with tab_apropos:
+    st.markdown(
+        f"""
+        <div class="about-card">
+            <h3>{icon("flag")} Le but de cet outil</h3>
+            <p>
+                Cette application aide à réfléchir sur une situation de couple.
+                En répondant à quelques questions simples, vous obtenez une estimation
+                du niveau de risque de violence physique — <b>faible</b>, <b>modéré</b>
+                ou <b>élevé</b>.
+            </p>
+            <hr class="about-divider">
+            <h3>{icon("users")} Réalisé par</h3>
+            <div>
+                <span class="author-chip">Telesphore Ebanga-Mballa</span>
+                <span class="author-chip">Stéphane Bella-Mbarga</span>
+                <span class="author-chip">Brenda Enow</span>
+                <span class="author-chip">Kum-Collins</span>
+                <span class="author-chip">Georges Nguefack-Tsague</span>
+            </div>
+            <hr class="about-divider">
+            <h3>{icon("warning")} Ce qu'il faut savoir</h3>
+            <p>
+                Le résultat affiché est une estimation basée sur des situations déjà
+                observées par le passé. <b>Ce n'est pas un diagnostic</b> et cela ne
+                remplace pas l'avis d'un médecin, d'un travailleur social ou de toute
+                autre personne qualifiée. En cas de danger, rapprochez-vous des
+                autorités locales ou d'une association d'aide aux victimes.
+            </p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-    df_obs = pd.DataFrame([observation])
+with tab_prediction:
+    # -----------------------------------------------------------------------
+    # 3.1 FORMULAIRE DE SAISIE
+    # -----------------------------------------------------------------------
+    with st.form("formulaire_prediction"):
+        col1, col2, col3 = st.columns(3)
 
-    # indicateurs de valeur manquante (aucune ici, saisie complete -> tous a 0)
-    for col in num_vars:
-        col_manquant = f"{col}_manquant"
-        if col_manquant in colonnes_entrainement:
-            df_obs[col_manquant] = 0
+        with col1:
+            with st.container(border=True):
+                st.markdown(f'<div class="section-title">{icon("user")} La femme</div>', unsafe_allow_html=True)
+                age_femme = st.slider("Son âge", 15, 49, 28)
+                age_premiere_union = st.slider("Son âge lors de sa première mise en couple", 10, 40, 18)
+                age_premier_rapport = st.slider("Son âge lors de son premier rapport intime", 10, 40, 17)
+                education_femme = st.selectbox(
+                    "Son niveau d'études", [0, 1, 2, 3], index=1,
+                    format_func=lambda x: EDUCATION_LABELS[x],
+                    key="education_femme",
+                )
+                richesse = st.select_slider(
+                    "Le niveau de vie de son foyer",
+                    options=[1, 2, 3, 4, 5], value=3,
+                    format_func=lambda x: {
+                        1: "Très modeste", 2: "Modeste", 3: "Moyen", 4: "Aisé", 5: "Riche",
+                    }[x],
+                )
+                milieu = st.radio(
+                    "Où vit-elle ?", [0, 1],
+                    format_func=lambda x: "En ville" if x == 0 else "À la campagne", horizontal=True
+                )
 
-    # encodage one-hot des variables categorielles, aligne sur les colonnes d'entrainement
-    df_obs_encoded = pd.get_dummies(df_obs, columns=CAT_VARS, prefix=CAT_VARS)
-    df_obs_encoded = df_obs_encoded.reindex(columns=colonnes_entrainement, fill_value=0)
+        with col2:
+            with st.container(border=True):
+                st.markdown(f'<div class="section-title">{icon("user")} Le partenaire</div>', unsafe_allow_html=True)
+                age_partenaire = st.slider("Son âge", 15, 90, 35)
+                education_partenaire = st.selectbox(
+                    "Son niveau d'études", [0, 1, 2, 3], index=1,
+                    format_func=lambda x: EDUCATION_LABELS[x],
+                    key="education_partenaire",
+                )
+                alcool_partenaire = st.selectbox(
+                    "Boit-il de l'alcool ?", [0, 1, 2],
+                    format_func=lambda x: {0: "Jamais", 1: "Souvent", 2: "Parfois"}[x]
+                )
+                ctrl_score = _index_slider(
+                    "Contrôle-t-il ses activités (sorties, argent, amis) ?",
+                    ["Pas du tout", "Un peu", "Modérément", "Assez", "Beaucoup", "Énormément"],
+                )
+                polygamie = _index_slider(
+                    "A-t-il d'autres épouses ?",
+                    ["Aucune", "1 autre", "2 autres", "3 autres"],
+                )
 
-    proba = model.predict_proba(df_obs_encoded)[0, 1]
+        with col3:
+            with st.container(border=True):
+                st.markdown(f'<div class="section-title">{icon("home")} Le couple et la famille</div>', unsafe_allow_html=True)
+                transmission_intergen = st.radio(
+                    "Le père de la femme battait-il sa mère quand elle était enfant ?", [0, 1],
+                    format_func=lambda x: "Non" if x == 0 else "Oui", horizontal=True
+                )
+                attitude_score = _index_slider(
+                    "Pense-t-elle que frapper sa femme peut parfois être justifié ?",
+                    ["Jamais", "Rarement", "Parfois", "Souvent", "La plupart du temps", "Toujours"],
+                )
+                autonomie_score = _index_slider(
+                    "Décide-t-elle elle-même pour l'argent, sa santé et ses sorties ?",
+                    ["Rarement", "Parfois", "Souvent", "Toujours"],
+                )
+                region = st.selectbox(
+                    "Région où vit le couple", sorted(categories_valides["region"], key=lambda c: int(c)),
+                    format_func=lambda c: libelle("region", c)
+                )
+                ethnicite = st.selectbox(
+                    "Ethnie de la femme", categories_valides["ethnicite"],
+                    format_func=lambda c: libelle("ethnicite", c)
+                )
+                religion = st.selectbox(
+                    "Religion de la femme", categories_valides["religion"],
+                    format_func=lambda c: libelle("religion", c)
+                )
+                occupation_partenaire = st.selectbox(
+                    "Métier du partenaire", categories_valides["occupation_partenaire"],
+                    format_func=lambda c: libelle("occupation_partenaire", c)
+                )
+                residence_partenaire = st.selectbox(
+                    "Le partenaire vit-il avec elle actuellement ?", categories_valides["residence_partenaire"],
+                    format_func=lambda c: libelle("residence_partenaire", c)
+                )
 
-    st.subheader("Résultat")
-    c1, c2 = st.columns([1, 2])
+        st.markdown("<br>", unsafe_allow_html=True)
+        valider = st.form_submit_button(
+            "Voir le résultat", icon=":material/search:", type="primary", use_container_width=True
+        )
 
-    with c1:
-        st.metric("Probabilité prédite", f"{proba:.1%}")
+    # -----------------------------------------------------------------------
+    # 3.2 CONSTRUCTION DE L'OBSERVATION ET PREDICTION
+    # -----------------------------------------------------------------------
+    if valider:
+        ecart_age = age_partenaire - age_femme
 
-    with c2:
+        observation = {
+            "ctrl_score": ctrl_score,
+            "transmission_intergen": transmission_intergen,
+            "alcool_partenaire": alcool_partenaire,
+            "ecart_age": ecart_age,
+            "age_femme": age_femme,
+            "age_partenaire": age_partenaire,
+            "age_premiere_union": age_premiere_union,
+            "age_premier_rapport": age_premier_rapport,
+            "richesse": richesse,
+            "education_partenaire": education_partenaire,
+            "education_femme": education_femme,
+            "attitude_score": attitude_score,
+            "autonomie_score": autonomie_score,
+            "polygamie": polygamie,
+            "milieu": milieu,
+            "ethnicite": ethnicite,
+            "religion": religion,
+            "region": region,
+            "occupation_partenaire": occupation_partenaire,
+            "residence_partenaire": residence_partenaire,
+        }
+
+        df_obs = pd.DataFrame([observation])
+
+        # indicateurs de valeur manquante (aucune ici, saisie complete -> tous a 0)
+        for col in num_vars:
+            col_manquant = f"{col}_manquant"
+            if col_manquant in colonnes_entrainement:
+                df_obs[col_manquant] = 0
+
+        # encodage one-hot des variables categorielles, aligne sur les colonnes d'entrainement
+        df_obs_encoded = pd.get_dummies(df_obs, columns=CAT_VARS, prefix=CAT_VARS)
+        df_obs_encoded = df_obs_encoded.reindex(columns=colonnes_entrainement, fill_value=0)
+
+        proba = model.predict_proba(df_obs_encoded)[0, 1]
+        proba_pct = min(proba, 1.0) * 100
+
         if proba < 0.25:
-            st.success("Risque prédit : **Faible**")
+            niveau, classe = "Faible", "low"
         elif proba < 0.50:
-            st.warning("Risque prédit : **Modéré**")
+            niveau, classe = "Modéré", "medium"
         else:
-            st.error("Risque prédit : **Élevé**")
+            niveau, classe = "Élevé", "high"
 
-    st.progress(min(proba, 1.0))
+        st.markdown('<div class="result-card">', unsafe_allow_html=True)
+        st.markdown(f'<div class="section-title">{icon("check")} Résultat</div>', unsafe_allow_html=True)
 
-    st.caption(
-        "Cette estimation reflète des associations statistiques observées dans l'échantillon "
-        "EDS et ne doit pas être interprétée comme un diagnostic individuel ni une preuve de causalité."
-    )
+        c1, c2 = st.columns([1, 2])
+
+        with c1:
+            st.markdown(
+                f"""
+                <div class="metric-box">
+                    <div class="value">{proba:.0%}</div>
+                    <div class="label">Chances estimées</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+        with c2:
+            st.markdown(
+                f"""
+                <p>Niveau de risque : <span class="badge badge-{classe}">{niveau}</span></p>
+                <div class="gauge-track">
+                    <div class="gauge-fill {classe}" style="width: {proba_pct:.1f}%;"></div>
+                </div>
+                <div class="gauge-caption"><span>Faible</span><span>Modéré</span><span>Élevé</span></div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        st.caption(
+            "Ce résultat est une estimation à titre indicatif. Il ne remplace pas "
+            "l'avis d'un professionnel (médecin, travailleur social, association d'aide)."
+        )
+
+# ---------------------------------------------------------------------------
+# 4. PIED DE PAGE
+# ---------------------------------------------------------------------------
+st.markdown(
+    """
+    <div class="app-footer">
+        Cet outil aide à la réflexion — il ne remplace pas un avis médical ou social professionnel.
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
